@@ -13,6 +13,7 @@ struct proc proc[NPROC];
 struct proc *initproc;
 
 int nextpid = 1;
+uint paused = 0;
 struct spinlock pid_lock;
 
 extern void forkret(void);
@@ -243,6 +244,7 @@ userinit(void)
   p->cwd = namei("/");
 
   p->state = RUNNABLE;
+  p->last_runnable_time = ticks;
 
   release(&p->lock);
 }
@@ -313,6 +315,7 @@ fork(void)
 
   acquire(&np->lock);
   np->state = RUNNABLE;
+  np->last_runnable_time = ticks;
   release(&np->lock);
 
   return pid;
@@ -427,43 +430,6 @@ wait(uint64 addr)
   }
 }
 
-// Per-CPU process scheduler.
-// Each CPU calls scheduler() after setting itself up.
-// Scheduler never returns.  It loops, doing:
-//  - choose a process to run.
-//  - swtch to start running that process.
-//  - eventually that process transfers control
-//    via swtch back to the scheduler.
-void
-scheduler(void)
-{
-  struct proc *p;
-  struct cpu *c = mycpu();
-  
-  c->proc = 0;
-  for(;;){
-    // Avoid deadlock by ensuring that devices can interrupt.
-    intr_on();
-
-    for(p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-      }
-      release(&p->lock);
-    }
-  }
-}
-
 // Switch to scheduler.  Must hold only p->lock
 // and have changed proc->state. Saves and restores
 // intena because intena is a property of this
@@ -498,6 +464,7 @@ yield(void)
   struct proc *p = myproc();
   acquire(&p->lock);
   p->state = RUNNABLE;
+  p->last_runnable_time = ticks;
   sched();
   release(&p->lock);
 }
@@ -566,6 +533,7 @@ wakeup(void *chan)
       acquire(&p->lock);
       if(p->state == SLEEPING && p->chan == chan) {
         p->state = RUNNABLE;
+        p->last_runnable_time = ticks;
       }
       release(&p->lock);
     }
@@ -587,6 +555,7 @@ kill(int pid)
       if(p->state == SLEEPING){
         // Wake process from sleep().
         p->state = RUNNABLE;
+        p->last_runnable_time = ticks;
       }
       release(&p->lock);
       return 0;
@@ -654,3 +623,113 @@ procdump(void)
     printf("\n");
   }
 }
+
+int
+pause_system(int seconds)
+{
+  paused = ticks + 10 * seconds;
+  yield();
+  return 0;
+}
+
+int
+kill_system(void)
+{
+  struct proc *p;
+
+  for(p = proc + 2; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    p->killed = 1;
+    if(p->state == SLEEPING) {
+      // Wake process from sleep().
+      p->state = RUNNABLE;
+      p->last_runnable_time = ticks;
+    }
+    release(&p->lock);
+  }
+  return 0;
+}
+
+// Per-CPU process scheduler.
+// Each CPU calls scheduler() after setting itself up.
+// Scheduler never returns.  It loops, doing:
+//  - choose a process to run.
+//  - swtch to start running that process.
+//  - eventually that process transfers control
+//    via swtch back to the scheduler.
+// Schduler policy is decided by SCHEDFLAG
+#ifdef SJF
+void
+scheduler(void)
+{
+
+}
+#elif FCFS
+void
+scheduler(void)
+{
+  struct proc *p;
+  struct cpu *c = mycpu();
+  
+  c->proc = 0;
+  for(;;){
+    // Avoid deadlock by ensuring that devices can interrupt.
+    intr_on();
+
+    if (paused && ticks >= paused)
+      paused = 0;
+    uint min_runnable = ticks;
+    struct proc *min_p = 0;
+    for(p = proc; p < &proc[NPROC] && !paused; p++) {
+      acquire(&p->lock);
+      if(p->state == RUNNABLE && (p->last_runnable_time < min_runnable)) {
+        min_runnable = p->last_runnable_time;
+        min_p = p;
+      }
+      release(&p->lock);
+    }
+    if (!min_p)
+      continue;
+    acquire(&min_p->lock);
+    min_p->state = RUNNING;
+    c->proc = min_p;
+    swtch(&c->context, &min_p->context);
+    c->proc = 0;
+    release(&min_p->lock);
+  }
+}
+#elif RR
+void
+scheduler(void)
+{
+  struct proc *p;
+  struct cpu *c = mycpu();
+  
+  c->proc = 0;
+  for(;;){
+    // Avoid deadlock by ensuring that devices can interrupt.
+    intr_on();
+
+    if (paused && ticks >= paused)
+      paused = 0;
+
+    for(p = proc; p < &proc[NPROC] && !paused; p++) {
+      acquire(&p->lock);
+      if(p->state == RUNNABLE) {
+        // Switch to chosen process.  It is the process's job
+        // to release its lock and then reacquire it
+        // before jumping back to us.
+        p->state = RUNNING;
+        c->proc = p;
+        swtch(&c->context, &p->context);
+
+        // Process is done running for now.
+        // It should have changed its p->state before coming back.
+        c->proc = 0;
+      }
+      release(&p->lock);
+    }
+  }
+}
+#endif // SCHEDFLAG
+
