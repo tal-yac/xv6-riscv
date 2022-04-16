@@ -14,6 +14,9 @@ struct proc *initproc;
 
 int nextpid = 1;
 uint paused = 0;
+#ifdef SJF
+uint rate = 5;
+#endif
 struct spinlock pid_lock;
 
 extern void forkret(void);
@@ -142,6 +145,10 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  #ifdef SJF
+  p->last_tick = p->mean_ticks = 0;
+  #endif
+
   return p;
 }
 
@@ -244,7 +251,9 @@ userinit(void)
   p->cwd = namei("/");
 
   p->state = RUNNABLE;
+  #ifdef FCFS
   p->last_runnable_time = ticks;
+  #endif
 
   release(&p->lock);
 }
@@ -315,7 +324,9 @@ fork(void)
 
   acquire(&np->lock);
   np->state = RUNNABLE;
+  #ifdef FCFS
   np->last_runnable_time = ticks;
+  #endif
   release(&np->lock);
 
   return pid;
@@ -464,7 +475,9 @@ yield(void)
   struct proc *p = myproc();
   acquire(&p->lock);
   p->state = RUNNABLE;
+  #ifdef FCFS
   p->last_runnable_time = ticks;
+  #endif
   sched();
   release(&p->lock);
 }
@@ -533,7 +546,9 @@ wakeup(void *chan)
       acquire(&p->lock);
       if(p->state == SLEEPING && p->chan == chan) {
         p->state = RUNNABLE;
+        #ifdef FCFS
         p->last_runnable_time = ticks;
+        #endif
       }
       release(&p->lock);
     }
@@ -555,7 +570,9 @@ kill(int pid)
       if(p->state == SLEEPING){
         // Wake process from sleep().
         p->state = RUNNABLE;
+        #ifdef FCFS
         p->last_runnable_time = ticks;
+        #endif
       }
       release(&p->lock);
       return 0;
@@ -627,7 +644,7 @@ procdump(void)
 int
 pause_system(int seconds)
 {
-  paused = ticks + 10 * seconds;
+  paused = ticks + SECONDS_TO_TICKS(seconds);
   yield();
   return 0;
 }
@@ -643,7 +660,9 @@ kill_system(void)
     if(p->state == SLEEPING) {
       // Wake process from sleep().
       p->state = RUNNABLE;
+      #ifdef FCFS
       p->last_runnable_time = ticks;
+      #endif
     }
     release(&p->lock);
   }
@@ -659,10 +678,45 @@ kill_system(void)
 //    via swtch back to the scheduler.
 // Schduler policy is decided by SCHEDFLAG
 #ifdef SJF
+void update_mean_ticks(struct proc *p)
+{
+  p->mean_ticks = ((10 - rate) * p->mean_ticks + rate * p->last_tick) / 10;
+}
 void
 scheduler(void)
 {
+  struct proc *p;
+  struct cpu *c = mycpu();
+  
+  c->proc = 0;
+  for(;;){
+    // Avoid deadlock by ensuring that devices can interrupt.
+    intr_on();
 
+    if (paused && ticks >= paused)
+      paused = 0;
+    uint min_ticks = ~0;
+    struct proc *min_p = 0;
+    for(p = proc; p < &proc[NPROC] && !paused; p++) {
+      acquire(&p->lock);
+      if(p->state == RUNNABLE && (p->mean_ticks < min_ticks)) {
+        min_ticks = p->mean_ticks;
+        min_p = p;
+      }
+      release(&p->lock);
+    }
+    if (!min_p)
+      continue;
+    acquire(&min_p->lock);
+    min_p->state = RUNNING;
+    c->proc = min_p;
+    uint burst_start = ticks;
+    swtch(&c->context, &min_p->context);
+    p->last_tick = ticks - burst_start;
+    update_mean_ticks(p);
+    c->proc = 0;
+    release(&min_p->lock);
+  }
 }
 #elif FCFS
 void
@@ -678,7 +732,7 @@ scheduler(void)
 
     if (paused && ticks >= paused)
       paused = 0;
-    uint min_runnable = ticks;
+    uint min_runnable = ~0;
     struct proc *min_p = 0;
     for(p = proc; p < &proc[NPROC] && !paused; p++) {
       acquire(&p->lock);
