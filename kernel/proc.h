@@ -93,11 +93,11 @@ struct proc {
   int paused;                  // If non-zero, have been paused
   int xstate;                  // Exit status to be returned to parent's wait
   int pid;                     // Process ID
+  uint last_runnable_time;     // The last tick the proc was runnable
+  uint last_sleeping_time; 
   #ifdef SJF
   uint mean_ticks;
   uint last_tick;
-  #elif FCFS
-  uint last_runnable_time;     // The last tick the proc was runnable
   #endif
 
   // wait_lock must be held when using this:
