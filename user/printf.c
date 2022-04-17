@@ -39,6 +39,21 @@ printint(int fd, int xx, int base, int sgn)
 }
 
 static void
+printuint(int fd, int x, int base)
+{
+  char buf[16];
+  int i;
+
+  i = 0;
+  do{
+    buf[i++] = digits[x % base];
+  }while((x /= base) != 0);
+
+  while(--i >= 0)
+    putc(fd, buf[i]);
+}
+
+static void
 printptr(int fd, uint64 x) {
   int i;
   putc(fd, '0');
@@ -66,6 +81,8 @@ vprintf(int fd, const char *fmt, va_list ap)
     } else if(state == '%'){
       if(c == 'd'){
         printint(fd, va_arg(ap, int), 10, 1);
+      } else if(c == 'u') {
+        printuint(fd, va_arg(ap, uint), 10);
       } else if(c == 'l') {
         printint(fd, va_arg(ap, uint64), 10, 0);
       } else if(c == 'x') {
