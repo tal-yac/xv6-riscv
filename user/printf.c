@@ -39,7 +39,7 @@ printint(int fd, int xx, int base, int sgn)
 }
 
 static void
-printuint(int fd, int x, int base)
+printuint(int fd, uint x, int base)
 {
   char buf[16];
   int i;

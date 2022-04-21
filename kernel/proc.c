@@ -44,30 +44,30 @@ extern char trampoline[]; // trampoline.S
 struct spinlock wait_lock;
 
 void
-update_program_time(int last_tick)
+update_program_time(uint last_tick)
 {
   program_time += last_tick;
-  cpu_utilization = (program_time * 100) / (ticks - start_time);
+  cpu_utilization = (program_time * 100U) / (ticks - start_time);
 }
 
 void
-update_running_time_mean(int last_tick)
+update_running_time_mean(uint last_tick)
 {
-  running_time_mean = ((running_time_mean * number_of_switches) + last_tick) / (number_of_switches + 1);
+  running_time_mean = ((running_time_mean * number_of_switches) + last_tick) / (number_of_switches + 1U);
   ++number_of_switches;
 }
 
 void
-update_runnable_procceses_mean(int last_tick)
+update_runnable_procceses_mean(uint last_tick)
 {
-  runnable_procceses_mean = (runnable_procceses_mean * number_of_runnables + last_tick) / (number_of_runnables + 1);
+  runnable_procceses_mean = (runnable_procceses_mean * number_of_runnables + last_tick) / (number_of_runnables + 1U);
   ++number_of_runnables;
 }
 
 void
-update_sleeping_procceses_mean(int last_tick)
+update_sleeping_procceses_mean(uint last_tick)
 {
-  sleeping_procceses_mean = (sleeping_procceses_mean * number_of_sleeps + last_tick) / (number_of_sleeps + 1);
+  sleeping_procceses_mean = (sleeping_procceses_mean * number_of_sleeps + last_tick) / (number_of_sleeps + 1U);
   ++number_of_sleeps;
 }
 

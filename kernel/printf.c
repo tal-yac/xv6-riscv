@@ -104,6 +104,7 @@ printf(char *fmt, ...)
       break;
     case 'u':
       printuint(va_arg(ap, uint), 10);
+      break;
     case 'x':
       printint(va_arg(ap, int), 16, 1);
       break;
