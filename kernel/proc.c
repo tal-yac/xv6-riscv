@@ -489,7 +489,7 @@ wait(uint64 addr)
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
 // Schduler policy is decided by SCHEDFLAG
-#ifdef RR
+#ifdef DEFAULT
 void
 scheduler(void)
 {

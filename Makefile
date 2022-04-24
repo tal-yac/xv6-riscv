@@ -57,7 +57,7 @@ OBJCOPY = $(TOOLPREFIX)objcopy
 OBJDUMP = $(TOOLPREFIX)objdump
 
 ifndef SCHEDFLAG
-SCHEDFLAG := RR
+SCHEDFLAG := DEFAULT
 endif
 
 CFLAGS = -Wall -Werror -O -fno-omit-frame-pointer -ggdb
