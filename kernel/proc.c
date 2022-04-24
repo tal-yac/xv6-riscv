@@ -794,13 +794,15 @@ scheduler(void)
       if(p->state == RUNNABLE && (p->mean_ticks < min_ticks)) {
         min_ticks = p->mean_ticks;
         min_p = p;
+        if (p->pid < 3)
+          goto RUN;
       }
       release(&p->lock);
     }
     if (!min_p)
       continue;
     acquire(&min_p->lock);
-    min_p->state = RUNNING;
+    RUN: min_p->state = RUNNING;
     update_runnable_procceses_mean(ticks - min_p->last_runnable_time);
     c->proc = min_p;
     uint burst_start = ticks;
