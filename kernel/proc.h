@@ -90,15 +90,8 @@ struct proc {
   enum procstate state;        // Process state
   void *chan;                  // If non-zero, sleeping on chan
   int killed;                  // If non-zero, have been killed
-  int paused;                  // If non-zero, have been paused
   int xstate;                  // Exit status to be returned to parent's wait
   int pid;                     // Process ID
-  uint last_runnable_time;     // The last tick the proc was runnable
-  uint last_sleeping_time; 
-  #ifdef SJF
-  uint mean_ticks;
-  uint last_tick;
-  #endif
 
   // wait_lock must be held when using this:
   struct proc *parent;         // Parent process

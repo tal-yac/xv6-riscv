@@ -76,11 +76,6 @@ usertrap(void)
   if(p->killed)
     exit(-1);
 
-  if (p->paused) {
-    p->paused = 0;
-    yield();
-  }
-
   // give up the CPU if this is a timer interrupt.
   if(which_dev == 2)
     yield();

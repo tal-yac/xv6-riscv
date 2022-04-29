@@ -50,21 +50,6 @@ printint(int xx, int base, int sign)
 }
 
 static void
-printuint(uint x, int base)
-{
-  char buf[16];
-  int i;
-
-  i = 0;
-  do {
-    buf[i++] = digits[x % base];
-  } while((x /= base) != 0);
-
-  while(--i >= 0)
-    consputc(buf[i]);
-}
-
-static void
 printptr(uint64 x)
 {
   int i;
@@ -101,9 +86,6 @@ printf(char *fmt, ...)
     switch(c){
     case 'd':
       printint(va_arg(ap, int), 10, 1);
-      break;
-    case 'u':
-      printuint(va_arg(ap, uint), 10);
       break;
     case 'x':
       printint(va_arg(ap, int), 16, 1);
