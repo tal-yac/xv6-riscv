@@ -20,6 +20,9 @@ static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
 
+// returns 0 on success !0 otherwise
+extern uint64 cas(volatile void *addr, int expected, int newval);
+
 // helps ensure that wakeups of wait()ing
 // parents are not lost. helps obey the
 // memory model when using p->parent.
@@ -89,10 +92,14 @@ int
 allocpid() {
   int pid;
   
-  acquire(&pid_lock);
-  pid = nextpid;
-  nextpid = nextpid + 1;
-  release(&pid_lock);
+  // acquire(&pid_lock);
+  // pid = nextpid;
+  // nextpid = nextpid + 1;
+  // release(&pid_lock);
+
+  do {
+    pid = nextpid;
+  } while (cas(&nextpid, pid, pid + 1));
 
   return pid;
 }
