@@ -6,14 +6,17 @@
 #include "proc.h"
 #include "defs.h"
 
+enum {unused_q, sleeping_q, zombie_q, len_q};
+
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
 
 struct proc *initproc;
 
+struct conqueue queue[len_q];
+
 int nextpid = 1;
-struct spinlock pid_lock;
 
 extern void forkret(void);
 static void freeproc(struct proc *p);
@@ -51,7 +54,7 @@ procinit(void)
 {
   struct proc *p;
   
-  initlock(&pid_lock, "nextpid");
+  qinit();
   initlock(&wait_lock, "wait_lock");
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
@@ -660,4 +663,10 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+void
+qinit()
+{
+
 }

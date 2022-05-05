@@ -3,6 +3,7 @@
         "syscall.h": "c",
         "user.h": "c",
         "types.h": "c",
-        "defs.h": "c"
+        "defs.h": "c",
+        "proc.h": "c"
     }
 }

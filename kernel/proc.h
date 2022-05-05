@@ -20,6 +20,7 @@ struct context {
 
 // Per-CPU state.
 struct cpu {
+  struct conqueue *ready_queue;
   struct proc *proc;          // The process running on this cpu, or null.
   struct context context;     // swtch() here to enter scheduler().
   int noff;                   // Depth of push_off() nesting.
@@ -92,6 +93,7 @@ struct proc {
   int killed;                  // If non-zero, have been killed
   int xstate;                  // Exit status to be returned to parent's wait
   int pid;                     // Process ID
+  int nextproc;                // Next process in queue
 
   // wait_lock must be held when using this:
   struct proc *parent;         // Parent process
@@ -105,4 +107,11 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+};
+
+struct conqueue {
+  int head_index;
+  int tail_index;
+  struct spinlock head_lock;
+  struct spinlock tail_lock;
 };
