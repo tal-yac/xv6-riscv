@@ -6,7 +6,10 @@
 #include "proc.h"
 #include "defs.h"
 
-enum {unused_q, sleeping_q, zombie_q, len_q};
+#define QUEUE_DUMMY (NPROC)
+#define QUEUE_NULL (-1)
+
+enum Queue_type {UNUSED_Q, SLEEPING_Q, ZOMBIE_Q, READY_Q};
 
 struct cpu cpus[NCPU];
 
@@ -14,7 +17,7 @@ struct proc proc[NPROC];
 
 struct proc *initproc;
 
-struct conqueue queue[len_q];
+struct conqueue proc_queue[READY_Q + NCPU];
 
 int nextpid = 1;
 
@@ -52,14 +55,19 @@ proc_mapstacks(pagetable_t kpgtbl) {
 void
 procinit(void)
 {
+  int i;
   struct proc *p;
-  
-  qinit();
+
+  proc_qinit();
   initlock(&wait_lock, "wait_lock");
-  for(p = proc; p < &proc[NPROC]; p++) {
+  for(i = 0, p = proc; p < &proc[NPROC]; i++, p++) {
       initlock(&p->lock, "proc");
       p->kstack = KSTACK((int) (p - proc));
+      p->next = QUEUE_NULL;
+      p->index = i;
+      enqueue(i, UNUSED_Q);
   }
+
 }
 
 // Must be called with interrupts disabled,
@@ -114,19 +122,13 @@ allocpid() {
 static struct proc*
 allocproc(void)
 {
-  struct proc *p;
+  int pi;
+  if ((pi = dequeue(UNUSED_Q)) < 0)
+    return 0;
+    
+  struct proc *p = &proc[pi];
 
-  for(p = proc; p < &proc[NPROC]; p++) {
-    acquire(&p->lock);
-    if(p->state == UNUSED) {
-      goto found;
-    } else {
-      release(&p->lock);
-    }
-  }
-  return 0;
-
-found:
+  acquire(&p->lock);
   p->pid = allocpid();
   p->state = USED;
 
@@ -174,6 +176,7 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  enqueue(p->index, UNUSED_Q);
 }
 
 // Create a user page table for a given process,
@@ -253,8 +256,11 @@ userinit(void)
   p->cwd = namei("/");
 
   p->state = RUNNABLE;
+  p->cpu_num = 0;
 
   release(&p->lock);
+
+  enqueue(0, READY_Q);
 }
 
 // Grow or shrink user memory by n bytes.
@@ -282,7 +288,7 @@ growproc(int n)
 int
 fork(void)
 {
-  int i, pid;
+  int i, pid, cpu;
   struct proc *np;
   struct proc *p = myproc();
 
@@ -321,10 +327,17 @@ fork(void)
   np->parent = p;
   release(&wait_lock);
 
+  acquire(&p->lock);
+  cpu = p->cpu_num;
+  release(&p->lock);
+
   acquire(&np->lock);
   np->state = RUNNABLE;
+  np->cpu_num = cpu;
+  i = np->index;
   release(&np->lock);
 
+  enqueue(i, READY_Q + cpu);
   return pid;
 }
 
@@ -380,8 +393,11 @@ exit(int status)
 
   p->xstate = status;
   p->state = ZOMBIE;
+  int i = p->index;
 
   release(&wait_lock);
+
+  enqueue(i, ZOMBIE_Q);
 
   // Jump into the scheduler, never to return.
   sched();
@@ -449,28 +465,29 @@ scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
+  int cpu_num = cpuid();
+  int pi;
   
   c->proc = 0;
   for(;;){
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
+    if ((pi = dequeue(READY_Q + cpu_num)) < 0)
+      continue;
+    p = &proc[pi];
+    acquire(&p->lock);
+    // Switch to chosen process.  It is the process's job
+    // to release its lock and then reacquire it
+    // before jumping back to us.
+    p->state = RUNNING;
+    c->proc = p;
+    swtch(&c->context, &p->context);
 
-    for(p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-      }
-      release(&p->lock);
-    }
+    // Process is done running for now.
+    // It should have changed its p->state before coming back.
+    c->proc = 0;
+    
+    release(&p->lock);
   }
 }
 
@@ -508,6 +525,7 @@ yield(void)
   struct proc *p = myproc();
   acquire(&p->lock);
   p->state = RUNNABLE;
+  enqueue(p->index, READY_Q + p->cpu_num);
   sched();
   release(&p->lock);
 }
@@ -553,6 +571,7 @@ sleep(void *chan, struct spinlock *lk)
   // Go to sleep.
   p->chan = chan;
   p->state = SLEEPING;
+  enqueue(p->index, SLEEPING_Q);
 
   sched();
 
@@ -570,12 +589,20 @@ void
 wakeup(void *chan)
 {
   struct proc *p;
+  int s[NPROC];
+  int len;
 
-  for(p = proc; p < &proc[NPROC]; p++) {
-    if(p != myproc()){
+  clear_queue(SLEEPING_Q, s, &len);
+
+  for(int i = 0; i < len; i++) {
+    p = &proc[s[i]];
+    if(p != myproc()) {
       acquire(&p->lock);
-      if(p->state == SLEEPING && p->chan == chan) {
+      if(p->chan == chan) {
         p->state = RUNNABLE;
+        enqueue(s[i], READY_Q + p->cpu_num);
+      } else {
+        enqueue(s[i], SLEEPING_Q);
       }
       release(&p->lock);
     }
@@ -666,7 +693,97 @@ procdump(void)
 }
 
 void
-qinit()
+proc_qinit()
 {
+  // init dummy procs - we only need next index and lock
+   for (int i = NPROC; i < NPROC + NELEM(proc_queue); i++) {
+    proc[i].next = QUEUE_NULL;
+    proc[i].index = i;
+    initlock(&proc[i].lock, "dummy_lock");
+  }
+  for (int i = 0; i < NELEM(proc_queue); i++) {
+    struct conqueue *q = &proc_queue[i];
+    q->head_index = QUEUE_DUMMY + i;
+    q->tail_index = QUEUE_DUMMY + i;
+    initlock(&q->head_lock, "head_lock");
+    initlock(&q->tail_lock, "tail_lock");
+  }
+}
 
+void
+enqueue(int proc_index, int dst_index)
+{
+  //printf("enq\n");
+  //printf("enq %d %d\n", proc_index, dst_index);
+  struct conqueue *dst = &proc_queue[dst_index];
+  acquire(&dst->tail_lock);
+  struct proc *p = &proc[dst->tail_index];
+  acquire(&p->lock);
+  dst->tail_index = p->next = proc_index;
+  release(&p->lock);
+  release(&dst->tail_lock);
+}
+
+int
+dequeue(int src_index)
+{
+  //printf("deq\n");
+  //printf("deq %d\n", src_index);
+  struct conqueue *src = &proc_queue[src_index];
+  int head, next /*retry = 3*/;
+  while (1) {
+    acquire(&src->head_lock);
+    head = src->head_index;
+    struct proc *p = &proc[head];
+    acquire(&p->lock);
+    next = p->next;
+    if (next == QUEUE_NULL) {
+      release(&p->lock);
+      release(&src->head_lock);
+      return -1;
+    }
+    src->head_index = next;
+    p->next = QUEUE_NULL;
+    release(&p->lock);
+    release(&src->head_lock);
+    if (head >= QUEUE_DUMMY) {
+      // Special marker - put it back.     
+      enqueue(head, src_index);
+      continue;
+    }
+    //printf("deq s %d\n", head);
+    return head;
+  }
+}
+
+void
+clear_queue(int src, int *dst, int *len)
+{
+  int temp;
+  *len = 0;
+  while((temp = dequeue(src)) >= 0) {
+    dst[(*len)++] = temp;
+  }
+}
+
+int
+set_cpu(int cpu_num)
+{
+  struct proc *p = myproc();
+  acquire(&p->lock);
+  p->cpu_num = cpu_num;
+  release(&p->lock);
+  yield();
+  return 0;
+}
+
+int
+get_cpu(void)
+{
+  int cpu = -1;
+  struct proc *p = myproc();
+  acquire(&p->lock);
+  cpu = p->cpu_num;
+  release(&p->lock);
+  return cpu;
 }
