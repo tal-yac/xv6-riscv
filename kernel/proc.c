@@ -8,6 +8,7 @@
 
 #define QUEUE_DUMMY (NPROC)
 #define QUEUE_NULL (-1)
+#define DEQUEUE(Q) (q_remove(Q, QUEUE_DUMMY))
 
 enum Queue_type {UNUSED_Q, SLEEPING_Q, ZOMBIE_Q, READY_Q};
 
@@ -123,7 +124,7 @@ static struct proc*
 allocproc(void)
 {
   int pi;
-  if ((pi = dequeue(UNUSED_Q)) < 0)
+  if ((pi = DEQUEUE(UNUSED_Q)) < 0)
     return 0;
     
   struct proc *p = &proc[pi];
@@ -472,10 +473,12 @@ scheduler(void)
   for(;;){
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
-    if ((pi = dequeue(READY_Q + cpu_num)) < 0)
+    if ((pi = DEQUEUE(READY_Q + cpu_num)) < 0)
       continue;
+    printf("sched\n");
     p = &proc[pi];
     acquire(&p->lock);
+    printf("is sched?\n");
     // Switch to chosen process.  It is the process's job
     // to release its lock and then reacquire it
     // before jumping back to us.
@@ -571,6 +574,7 @@ sleep(void *chan, struct spinlock *lk)
   // Go to sleep.
   p->chan = chan;
   p->state = SLEEPING;
+  printf("sleep\n");
   enqueue(p->index, SLEEPING_Q);
 
   sched();
@@ -588,6 +592,7 @@ sleep(void *chan, struct spinlock *lk)
 void
 wakeup(void *chan)
 {
+  printf("wake up\n");
   struct proc *p;
   int s[NPROC];
   int len;
@@ -696,7 +701,7 @@ void
 proc_qinit()
 {
   // init dummy procs - we only need next index and lock
-   for (int i = NPROC; i < NPROC + NELEM(proc_queue); i++) {
+   for (int i = QUEUE_DUMMY; i < QUEUE_DUMMY + NELEM(proc_queue); i++) {
     proc[i].next = QUEUE_NULL;
     proc[i].index = i;
     initlock(&proc[i].lock, "dummy_lock");
@@ -714,46 +719,82 @@ void
 enqueue(int proc_index, int dst_index)
 {
   //printf("enq\n");
-  //printf("enq %d %d\n", proc_index, dst_index);
+  printf("enq %d %d\n", proc_index, dst_index);
   struct conqueue *dst = &proc_queue[dst_index];
-  acquire(&dst->tail_lock);
-  struct proc *p = &proc[dst->tail_index];
-  acquire(&p->lock);
-  dst->tail_index = p->next = proc_index;
-  release(&p->lock);
-  release(&dst->tail_lock);
+  // acquire(&dst->tail_lock);
+  // struct proc *p = &proc[dst->tail_index];
+  // acquire(&p->lock);
+  // dst->tail_index = p->next = proc_index;
+  // release(&p->lock);
+  // release(&dst->tail_lock);
+  struct proc *cur = &proc[dst->head_index];
+  acquire(&cur->lock);
+  while(cur->next != QUEUE_NULL){
+    struct proc *pred = cur;
+    cur = &proc[cur->next];
+    printf("is same: %d", cur->index == proc_index);
+    release(&pred->lock);
+    acquire(&cur->lock);
+  }
+  cur->next = proc_index;
+  release(&cur->lock);
+  printf("enqed\n");
 }
 
 int
-dequeue(int src_index)
+q_remove(int src_index, int proc_index)
 {
-  //printf("deq\n");
-  //printf("deq %d\n", src_index);
+  printf("deq %d %d\n", src_index, proc_index);
   struct conqueue *src = &proc_queue[src_index];
-  int head, next /*retry = 3*/;
-  while (1) {
-    acquire(&src->head_lock);
-    head = src->head_index;
-    struct proc *p = &proc[head];
-    acquire(&p->lock);
-    next = p->next;
-    if (next == QUEUE_NULL) {
-      release(&p->lock);
-      release(&src->head_lock);
+  // int head, next;
+  // while (1) {
+  //   acquire(&src->head_lock);
+  //   head = src->head_index;
+  //   struct proc *p = &proc[head];
+  //   acquire(&p->lock);
+  //   next = p->next;
+  //   if (next == QUEUE_NULL) {
+  //     release(&p->lock);
+  //     release(&src->head_lock);
+  //     return -1;
+  //   }
+  //   src->head_index = next;
+  //   p->next = QUEUE_NULL;
+  //   release(&p->lock);
+  //   release(&src->head_lock);
+  //   if (head >= QUEUE_DUMMY) {
+  //     // Special marker - put it back.     
+  //     enqueue(head, src_index);
+  //     continue;
+  //   }
+  //   //printf("deq s %d\n", head);
+  //   return head;
+  // }
+  struct proc* pred;
+  struct proc* cur;
+  pred = PELEM(proc, src->head_index);
+  acquire(&pred->lock);
+  if (pred->next == QUEUE_NULL) {
+    printf("not found\n");
+      release(&pred->lock);
       return -1;
-    }
-    src->head_index = next;
-    p->next = QUEUE_NULL;
-    release(&p->lock);
-    release(&src->head_lock);
-    if (head >= QUEUE_DUMMY) {
-      // Special marker - put it back.     
-      enqueue(head, src_index);
-      continue;
-    }
-    //printf("deq s %d\n", head);
-    return head;
   }
+  cur = PELEM(proc, pred->next);
+  acquire(&cur->lock);
+  if (proc_index < QUEUE_DUMMY)
+    while(cur->index != proc_index){
+      release(&pred->lock);
+      pred = cur;
+      cur = PELEM(proc, pred->next);
+      acquire(&cur->lock);
+    }
+  printf("found\n");
+  pred->next = cur->next;
+  cur->next = QUEUE_NULL;
+  proc_index = cur->index;
+  release(&pred->lock);
+  release(&cur->lock);
+  return proc_index;
 }
 
 void
@@ -761,7 +802,7 @@ clear_queue(int src, int *dst, int *len)
 {
   int temp;
   *len = 0;
-  while((temp = dequeue(src)) >= 0) {
+  while((temp = DEQUEUE(src)) >= 0) {
     dst[(*len)++] = temp;
   }
 }

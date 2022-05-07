@@ -106,7 +106,7 @@ int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
 void            procdump(void);
 void            proc_qinit();
 void            enqueue(int proc_index, int dst_index);
-int             dequeue(int src_index);
+int             q_remove(int src_index, int proc_index);
 void            clear_queue(int src, int *dst, int *len);
 int             set_cpu(int cpu_num);
 int             get_cpu(void);
@@ -190,3 +190,4 @@ void            virtio_disk_intr(void);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
+#define PELEM(a, i) ((a) + (i))
