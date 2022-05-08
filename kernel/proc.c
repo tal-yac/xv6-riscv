@@ -14,7 +14,7 @@ enum Queue_type {UNUSED_Q, SLEEPING_Q, ZOMBIE_Q, READY_Q};
 
 struct cpu cpus[NCPU];
 
-struct proc proc[NPROC];
+struct proc proc[NPROC + READY_Q + NCPU];
 
 struct proc *initproc;
 
@@ -163,6 +163,7 @@ allocproc(void)
 static void
 freeproc(struct proc *p)
 {
+  q_remove(ZOMBIE_Q, p->index);
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
@@ -475,10 +476,8 @@ scheduler(void)
     intr_on();
     if ((pi = DEQUEUE(READY_Q + cpu_num)) < 0)
       continue;
-    printf("sched\n");
     p = &proc[pi];
     acquire(&p->lock);
-    printf("is sched?\n");
     // Switch to chosen process.  It is the process's job
     // to release its lock and then reacquire it
     // before jumping back to us.
@@ -574,7 +573,6 @@ sleep(void *chan, struct spinlock *lk)
   // Go to sleep.
   p->chan = chan;
   p->state = SLEEPING;
-  printf("sleep\n");
   enqueue(p->index, SLEEPING_Q);
 
   sched();
@@ -592,7 +590,6 @@ sleep(void *chan, struct spinlock *lk)
 void
 wakeup(void *chan)
 {
-  printf("wake up\n");
   struct proc *p;
   int s[NPROC];
   int len;
@@ -718,8 +715,7 @@ proc_qinit()
 void
 enqueue(int proc_index, int dst_index)
 {
-  //printf("enq\n");
-  printf("enq %d %d\n", proc_index, dst_index);
+  // printf("enq %d %d\n", proc_index, dst_index);
   struct conqueue *dst = &proc_queue[dst_index];
   // acquire(&dst->tail_lock);
   // struct proc *p = &proc[dst->tail_index];
@@ -732,19 +728,20 @@ enqueue(int proc_index, int dst_index)
   while(cur->next != QUEUE_NULL){
     struct proc *pred = cur;
     cur = &proc[cur->next];
-    printf("is same: %d", cur->index == proc_index);
+    if (cur->index == proc_index)
+      printf("SAME ENQ");
     release(&pred->lock);
     acquire(&cur->lock);
   }
   cur->next = proc_index;
   release(&cur->lock);
-  printf("enqed\n");
+  // printf("enqed\n");
 }
 
 int
 q_remove(int src_index, int proc_index)
 {
-  printf("deq %d %d\n", src_index, proc_index);
+  // printf("deq %d %d\n", src_index, proc_index);
   struct conqueue *src = &proc_queue[src_index];
   // int head, next;
   // while (1) {
@@ -775,24 +772,26 @@ q_remove(int src_index, int proc_index)
   pred = PELEM(proc, src->head_index);
   acquire(&pred->lock);
   if (pred->next == QUEUE_NULL) {
-    printf("not found\n");
-      release(&pred->lock);
-      return -1;
+    release(&pred->lock);
+    return -1;
   }
   cur = PELEM(proc, pred->next);
-  acquire(&cur->lock);
+  //acquire(&cur->lock);
   if (proc_index < QUEUE_DUMMY)
-    while(cur->index != proc_index){
+    while(pred->next != proc_index){
       release(&pred->lock);
       pred = cur;
       cur = PELEM(proc, pred->next);
-      acquire(&cur->lock);
+      //acquire(&cur->lock);
     }
-  printf("found\n");
+  else
+    acquire(&cur->lock);
   pred->next = cur->next;
-  cur->next = QUEUE_NULL;
-  proc_index = cur->index;
   release(&pred->lock);
+  cur->next = QUEUE_NULL;
+  if (proc_index < QUEUE_DUMMY)
+    return proc_index;
+  proc_index = cur->index;
   release(&cur->lock);
   return proc_index;
 }
