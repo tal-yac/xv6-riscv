@@ -781,8 +781,8 @@ q_remove(int src_index, int proc_index)
     while(pred->next != proc_index){
       release(&pred->lock);
       pred = cur;
+      acquire(&pred->lock);
       cur = PELEM(proc, pred->next);
-      //acquire(&cur->lock);
     }
   else
     acquire(&cur->lock);
