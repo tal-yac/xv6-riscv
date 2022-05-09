@@ -110,10 +110,6 @@ struct proc {
   int index;                   // Process index in proc array
 };
 
-struct conqueue {
-  int head_index;
-  int tail_index;
-  int dummy_index;
-  struct spinlock head_lock;
-  struct spinlock tail_lock;
+struct concurrent_list {
+  struct proc head;
 };

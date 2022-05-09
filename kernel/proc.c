@@ -6,19 +6,20 @@
 #include "proc.h"
 #include "defs.h"
 
-#define QUEUE_DUMMY (NPROC)
-#define QUEUE_NULL (-1)
-#define DEQUEUE(Q) (q_remove(Q, QUEUE_DUMMY))
+#define LIST_NULL (-1)
+#define DEQUEUE(Q) (list_remove(Q, LIST_NULL))
 
-enum Queue_type {UNUSED_Q, SLEEPING_Q, ZOMBIE_Q, READY_Q};
+enum List_type {LIST_UNUSED, LIST_SLEEPING, LIST_ZOMBIE, LIST_READY};
+
+struct spinlock test_lock;
 
 struct cpu cpus[NCPU];
 
-struct proc proc[NPROC + READY_Q + NCPU];
+struct proc proc[NPROC];
 
 struct proc *initproc;
 
-struct conqueue proc_queue[READY_Q + NCPU];
+struct concurrent_list proc_list[LIST_READY + NCPU];
 
 int nextpid = 1;
 
@@ -58,15 +59,16 @@ procinit(void)
 {
   int i;
   struct proc *p;
+  initlock(&test_lock, "test_lock");
 
-  proc_qinit();
+  proc_list_init();
   initlock(&wait_lock, "wait_lock");
   for(i = 0, p = proc; p < &proc[NPROC]; i++, p++) {
       initlock(&p->lock, "proc");
       p->kstack = KSTACK((int) (p - proc));
-      p->next = QUEUE_NULL;
+      p->next = LIST_NULL;
       p->index = i;
-      enqueue(i, UNUSED_Q);
+      list_add(LIST_UNUSED, i);
   }
 
 }
@@ -124,7 +126,7 @@ static struct proc*
 allocproc(void)
 {
   int pi;
-  if ((pi = DEQUEUE(UNUSED_Q)) < 0)
+  if ((pi = DEQUEUE(LIST_UNUSED)) == LIST_NULL)
     return 0;
     
   struct proc *p = &proc[pi];
@@ -163,7 +165,7 @@ allocproc(void)
 static void
 freeproc(struct proc *p)
 {
-  q_remove(ZOMBIE_Q, p->index);
+  list_remove(LIST_ZOMBIE, p->index);
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
@@ -178,7 +180,7 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
-  enqueue(p->index, UNUSED_Q);
+  list_add(LIST_UNUSED, p->index);
 }
 
 // Create a user page table for a given process,
@@ -262,7 +264,7 @@ userinit(void)
 
   release(&p->lock);
 
-  enqueue(0, READY_Q);
+  list_add(LIST_READY, 0);
 }
 
 // Grow or shrink user memory by n bytes.
@@ -339,7 +341,7 @@ fork(void)
   i = np->index;
   release(&np->lock);
 
-  enqueue(i, READY_Q + cpu);
+  list_add(LIST_READY + cpu, i);
   return pid;
 }
 
@@ -399,7 +401,7 @@ exit(int status)
 
   release(&wait_lock);
 
-  enqueue(i, ZOMBIE_Q);
+  list_add(LIST_ZOMBIE, i);
 
   // Jump into the scheduler, never to return.
   sched();
@@ -467,21 +469,22 @@ scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
-  int cpu_num = cpuid();
+  int _cpu_num = cpuid();
   int pi;
   
   c->proc = 0;
   for(;;){
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
-    if ((pi = DEQUEUE(READY_Q + cpu_num)) < 0)
+    if ((pi = DEQUEUE(LIST_READY + _cpu_num)) == LIST_NULL)
       continue;
-    p = &proc[pi];
+    p = PELEM(proc, pi);
     acquire(&p->lock);
     // Switch to chosen process.  It is the process's job
     // to release its lock and then reacquire it
     // before jumping back to us.
     p->state = RUNNING;
+    p->cpu_num = _cpu_num;
     c->proc = p;
     swtch(&c->context, &p->context);
 
@@ -527,7 +530,7 @@ yield(void)
   struct proc *p = myproc();
   acquire(&p->lock);
   p->state = RUNNABLE;
-  enqueue(p->index, READY_Q + p->cpu_num);
+  list_add(LIST_READY + p->cpu_num, p->index);
   sched();
   release(&p->lock);
 }
@@ -573,7 +576,7 @@ sleep(void *chan, struct spinlock *lk)
   // Go to sleep.
   p->chan = chan;
   p->state = SLEEPING;
-  enqueue(p->index, SLEEPING_Q);
+  list_add(LIST_SLEEPING, p->index);
 
   sched();
 
@@ -590,25 +593,27 @@ sleep(void *chan, struct spinlock *lk)
 void
 wakeup(void *chan)
 {
+  acquire(&test_lock);
   struct proc *p;
   int s[NPROC];
   int len;
 
-  clear_queue(SLEEPING_Q, s, &len);
+  list_clear(LIST_SLEEPING, s, &len);
 
   for(int i = 0; i < len; i++) {
-    p = &proc[s[i]];
+    p = PELEM(proc, s[i]);
     if(p != myproc()) {
-      acquire(&p->lock);
+      //acquire(&p->lock);
       if(p->chan == chan) {
         p->state = RUNNABLE;
-        enqueue(s[i], READY_Q + p->cpu_num);
+        list_add(LIST_READY + p->cpu_num, s[i]);
       } else {
-        enqueue(s[i], SLEEPING_Q);
+        list_add(LIST_SLEEPING, s[i]);
       }
-      release(&p->lock);
+      //release(&p->lock);
     }
   }
+  release(&test_lock);
 }
 
 // Kill the process with the given pid.
@@ -694,40 +699,25 @@ procdump(void)
   }
 }
 
+// init head procs - we only need next and lock
 void
-proc_qinit()
+proc_list_init()
 {
-  // init dummy procs - we only need next index and lock
-   for (int i = QUEUE_DUMMY; i < QUEUE_DUMMY + NELEM(proc_queue); i++) {
-    proc[i].next = QUEUE_NULL;
-    proc[i].index = i;
-    initlock(&proc[i].lock, "dummy_lock");
-  }
-  for (int i = 0; i < NELEM(proc_queue); i++) {
-    struct conqueue *q = &proc_queue[i];
-    q->head_index = QUEUE_DUMMY + i;
-    q->tail_index = QUEUE_DUMMY + i;
-    initlock(&q->head_lock, "head_lock");
-    initlock(&q->tail_lock, "tail_lock");
+   for (struct concurrent_list *l = proc_list; l < PELEM(proc_list, NELEM(proc_list)); l++) {
+    l->head.next = LIST_NULL;
+    initlock(&l->head.lock, "list_head_lock");
   }
 }
 
 void
-enqueue(int proc_index, int dst_index)
+list_add(int list_index, int proc_index)
 {
-  // printf("enq %d %d\n", proc_index, dst_index);
-  struct conqueue *dst = &proc_queue[dst_index];
-  // acquire(&dst->tail_lock);
-  // struct proc *p = &proc[dst->tail_index];
-  // acquire(&p->lock);
-  // dst->tail_index = p->next = proc_index;
-  // release(&p->lock);
-  // release(&dst->tail_lock);
-  struct proc *cur = &proc[dst->head_index];
+  struct concurrent_list *dst = PELEM(proc_list, list_index);
+  struct proc *cur = &dst->head;
   acquire(&cur->lock);
-  while(cur->next != QUEUE_NULL){
+  while(cur->next != LIST_NULL){
     struct proc *pred = cur;
-    cur = &proc[cur->next];
+    cur = PELEM(proc, cur->next);
     if (cur->index == proc_index)
       printf("SAME ENQ");
     release(&pred->lock);
@@ -735,61 +725,35 @@ enqueue(int proc_index, int dst_index)
   }
   cur->next = proc_index;
   release(&cur->lock);
-  // printf("enqed\n");
 }
 
+// to remove first call DEQUEUE without locking proc_index
+// to remove specific node must hold p->lock before entering
+// return LIST_NULL if list is empty otherwise guaranteed to succeed
 int
-q_remove(int src_index, int proc_index)
+list_remove(int list_index, int proc_index)
 {
-  // printf("deq %d %d\n", src_index, proc_index);
-  struct conqueue *src = &proc_queue[src_index];
-  // int head, next;
-  // while (1) {
-  //   acquire(&src->head_lock);
-  //   head = src->head_index;
-  //   struct proc *p = &proc[head];
-  //   acquire(&p->lock);
-  //   next = p->next;
-  //   if (next == QUEUE_NULL) {
-  //     release(&p->lock);
-  //     release(&src->head_lock);
-  //     return -1;
-  //   }
-  //   src->head_index = next;
-  //   p->next = QUEUE_NULL;
-  //   release(&p->lock);
-  //   release(&src->head_lock);
-  //   if (head >= QUEUE_DUMMY) {
-  //     // Special marker - put it back.     
-  //     enqueue(head, src_index);
-  //     continue;
-  //   }
-  //   //printf("deq s %d\n", head);
-  //   return head;
-  // }
-  struct proc* pred;
-  struct proc* cur;
-  pred = PELEM(proc, src->head_index);
+  struct concurrent_list *src = &proc_list[list_index];
+  struct proc *pred = &src->head;
   acquire(&pred->lock);
-  if (pred->next == QUEUE_NULL) {
+  if (pred->next == LIST_NULL) {
     release(&pred->lock);
-    return -1;
+    return LIST_NULL;
   }
-  cur = PELEM(proc, pred->next);
-  //acquire(&cur->lock);
-  if (proc_index < QUEUE_DUMMY)
+  struct proc *cur = PELEM(proc, pred->next);
+  if (proc_index != LIST_NULL) // must lock proc before entering
     while(pred->next != proc_index){
       release(&pred->lock);
       pred = cur;
       acquire(&pred->lock);
       cur = PELEM(proc, pred->next);
     }
-  else
+  else // DEQUEUE doesn't require pre-locking
     acquire(&cur->lock);
   pred->next = cur->next;
   release(&pred->lock);
-  cur->next = QUEUE_NULL;
-  if (proc_index < QUEUE_DUMMY)
+  cur->next = LIST_NULL;
+  if (proc_index != LIST_NULL)
     return proc_index;
   proc_index = cur->index;
   release(&cur->lock);
@@ -797,11 +761,11 @@ q_remove(int src_index, int proc_index)
 }
 
 void
-clear_queue(int src, int *dst, int *len)
+list_clear(int src, int *dst, int *len)
 {
   int temp;
   *len = 0;
-  while((temp = DEQUEUE(src)) >= 0) {
+  while((temp = DEQUEUE(src)) != LIST_NULL) {
     dst[(*len)++] = temp;
   }
 }
