@@ -110,6 +110,7 @@ int             list_remove(int src_index, int proc_index);
 void            list_clear(int src, int *dst, int *len);
 int             set_cpu(int cpu_num);
 int             get_cpu(void);
+void            inc_cpu_count(void);
 
 // swtch.S
 void            swtch(struct context*, struct context*);

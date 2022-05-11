@@ -22,6 +22,7 @@ struct proc *initproc;
 struct concurrent_list proc_list[LIST_READY + NCPU];
 
 int nextpid = 1;
+int cpu_count = 0;
 
 extern void forkret(void);
 static void freeproc(struct proc *p);
@@ -65,6 +66,7 @@ procinit(void)
   initlock(&wait_lock, "wait_lock");
   for(i = 0, p = proc; p < &proc[NPROC]; i++, p++) {
       initlock(&p->lock, "proc");
+      initlock(&p->list_lock, "list_lock");
       p->kstack = KSTACK((int) (p - proc));
       p->next = LIST_NULL;
       p->index = i;
@@ -397,11 +399,10 @@ exit(int status)
 
   p->xstate = status;
   p->state = ZOMBIE;
-  int i = p->index;
 
   release(&wait_lock);
 
-  list_add(LIST_ZOMBIE, i);
+  list_add(LIST_ZOMBIE, p->index);
 
   // Jump into the scheduler, never to return.
   sched();
@@ -471,13 +472,14 @@ scheduler(void)
   struct cpu *c = mycpu();
   int _cpu_num = cpuid();
   int pi;
-  
+
   c->proc = 0;
   for(;;){
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
-    if ((pi = DEQUEUE(LIST_READY + _cpu_num)) == LIST_NULL)
+    if ((pi = DEQUEUE(LIST_READY + _cpu_num)) == LIST_NULL) {
       continue;
+    }
     p = PELEM(proc, pi);
     acquire(&p->lock);
     // Switch to chosen process.  It is the process's job
@@ -571,12 +573,12 @@ sleep(void *chan, struct spinlock *lk)
   // so it's okay to release lk.
 
   acquire(&p->lock);  //DOC: sleeplock1
+  list_add(LIST_SLEEPING, p->index);
   release(lk);
 
   // Go to sleep.
   p->chan = chan;
   p->state = SLEEPING;
-  list_add(LIST_SLEEPING, p->index);
 
   sched();
 
@@ -593,9 +595,8 @@ sleep(void *chan, struct spinlock *lk)
 void
 wakeup(void *chan)
 {
-  acquire(&test_lock);
   struct proc *p;
-  int s[NPROC];
+  static int s[NPROC];
   int len;
 
   list_clear(LIST_SLEEPING, s, &len);
@@ -603,17 +604,53 @@ wakeup(void *chan)
   for(int i = 0; i < len; i++) {
     p = PELEM(proc, s[i]);
     if(p != myproc()) {
-      //acquire(&p->lock);
+      acquire(&p->lock);
       if(p->chan == chan) {
         p->state = RUNNABLE;
         list_add(LIST_READY + p->cpu_num, s[i]);
       } else {
         list_add(LIST_SLEEPING, s[i]);
       }
-      //release(&p->lock);
+      release(&p->lock);
     }
   }
-  release(&test_lock);
+//  struct concurrent_list *src = PELEM(proc_list, LIST_SLEEPING);
+//   struct proc *pred = &src->head;
+//   acquire(&pred->list_lock);
+//   if (pred->next == LIST_NULL) {
+//     release(&pred->list_lock);
+//     return;
+//   }
+//   do {
+//     struct proc *cur = PELEM(proc, pred->next);
+//     acquire(&cur->list_lock);
+//     acquire(&cur->lock);
+//     if (cur != myproc() && cur->chan == chan) {
+//       cur->state = RUNNABLE;
+//       pred->next = cur->next;
+//       cur->next = LIST_NULL;
+//       list_add(LIST_READY + cur->cpu_num, cur->index);
+//     }
+//     release(&cur->lock);
+//     release(&pred->list_lock);
+//     pred = cur;
+//     release()
+//   }
+  
+//     while(cur->next != LIST_NULL){
+//       release(&cur->lock);
+//       release(&pred->list_lock);
+//       pred = cur;
+//       cur = PELEM(proc, cur->next);
+//       acquire(&cur->list_lock);
+//       if (cur->chan == chan) {
+//         cur->state = RUNNABLE;
+//         list_add(LIST_READY + cur->cpu_num, cur->index);
+//       }
+//     }
+//     release(&cur->lock);
+//   release(&pred->list_lock);
+//   release(&cur->list_lock);
 }
 
 // Kill the process with the given pid.
@@ -630,7 +667,9 @@ kill(int pid)
       p->killed = 1;
       if(p->state == SLEEPING){
         // Wake process from sleep().
+        list_remove(LIST_SLEEPING, p->index);
         p->state = RUNNABLE;
+        list_add(LIST_READY + p->cpu_num, p->index);
       }
       release(&p->lock);
       return 0;
@@ -714,17 +753,17 @@ list_add(int list_index, int proc_index)
 {
   struct concurrent_list *dst = PELEM(proc_list, list_index);
   struct proc *cur = &dst->head;
-  acquire(&cur->lock);
+  acquire(&cur->list_lock);
   while(cur->next != LIST_NULL){
     struct proc *pred = cur;
     cur = PELEM(proc, cur->next);
     if (cur->index == proc_index)
-      printf("SAME ENQ");
-    release(&pred->lock);
-    acquire(&cur->lock);
+      printf("SAME ENQ: list: %d index: %d \n", list_index, proc_index);
+    release(&pred->list_lock);
+    acquire(&cur->list_lock);
   }
   cur->next = proc_index;
-  release(&cur->lock);
+  release(&cur->list_lock);
 }
 
 // to remove first call DEQUEUE without locking proc_index
@@ -733,30 +772,28 @@ list_add(int list_index, int proc_index)
 int
 list_remove(int list_index, int proc_index)
 {
-  struct concurrent_list *src = &proc_list[list_index];
+  struct concurrent_list *src = PELEM(proc_list, list_index);
   struct proc *pred = &src->head;
-  acquire(&pred->lock);
+  acquire(&pred->list_lock);
   if (pred->next == LIST_NULL) {
-    release(&pred->lock);
+    release(&pred->list_lock);
     return LIST_NULL;
   }
   struct proc *cur = PELEM(proc, pred->next);
-  if (proc_index != LIST_NULL) // must lock proc before entering
-    while(pred->next != proc_index){
-      release(&pred->lock);
-      pred = cur;
-      acquire(&pred->lock);
-      cur = PELEM(proc, pred->next);
-    }
-  else // DEQUEUE doesn't require pre-locking
-    acquire(&cur->lock);
-  pred->next = cur->next;
-  release(&pred->lock);
-  cur->next = LIST_NULL;
+  acquire(&cur->list_lock);
   if (proc_index != LIST_NULL)
-    return proc_index;
-  proc_index = cur->index;
-  release(&cur->lock);
+    while(cur->index != proc_index){
+      release(&pred->list_lock);
+      pred = cur;
+      cur = PELEM(proc, cur->next);
+      acquire(&cur->list_lock);
+    }
+  pred->next = cur->next;
+  release(&pred->list_lock);
+  cur->next = LIST_NULL;
+  if (proc_index == LIST_NULL)
+    proc_index = cur->index;
+  release(&cur->list_lock);
   return proc_index;
 }
 
@@ -773,6 +810,8 @@ list_clear(int src, int *dst, int *len)
 int
 set_cpu(int cpu_num)
 {
+  if (cpu_num < 0 || cpu_num >= cpu_count)
+    return -1;
   struct proc *p = myproc();
   acquire(&p->lock);
   p->cpu_num = cpu_num;
@@ -790,4 +829,13 @@ get_cpu(void)
   cpu = p->cpu_num;
   release(&p->lock);
   return cpu;
+}
+
+void
+inc_cpu_count(void)
+{
+  int count;
+  do {
+    count = cpu_count;
+  } while (cas(&cpu_count, count, count + 1));
 }
