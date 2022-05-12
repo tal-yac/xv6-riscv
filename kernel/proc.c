@@ -10,8 +10,7 @@
 #define DEQUEUE(Q) (list_remove(Q, LIST_NULL))
 
 enum List_type {LIST_UNUSED, LIST_SLEEPING, LIST_ZOMBIE, LIST_READY};
-
-struct spinlock test_lock;
+struct spinlock debug_lock;
 
 struct cpu cpus[NCPU];
 
@@ -60,17 +59,17 @@ procinit(void)
 {
   int i;
   struct proc *p;
-  initlock(&test_lock, "test_lock");
+  initlock(&debug_lock, "debug_lock");
 
   proc_list_init();
   initlock(&wait_lock, "wait_lock");
   for(i = 0, p = proc; p < &proc[NPROC]; i++, p++) {
-      initlock(&p->lock, "proc");
-      initlock(&p->list_lock, "list_lock");
-      p->kstack = KSTACK((int) (p - proc));
-      p->next = LIST_NULL;
-      p->index = i;
-      list_add(LIST_UNUSED, i);
+    initlock(&p->lock, "proc");
+    initlock(&p->list_lock, "list_lock");
+    p->kstack = KSTACK((int) (p - proc));
+    p->next = LIST_NULL;
+    p->index = i;
+    list_add(LIST_UNUSED, i);
   }
 
 }
@@ -595,62 +594,50 @@ sleep(void *chan, struct spinlock *lk)
 void
 wakeup(void *chan)
 {
-  struct proc *p;
-  static int s[NPROC];
-  int len;
+  //acquire(&debug_lock);
+  // struct proc *p;
+  // static int s[NCPU][NPROC];
 
-  list_clear(LIST_SLEEPING, s, &len);
+  // int len;
 
-  for(int i = 0; i < len; i++) {
-    p = PELEM(proc, s[i]);
-    if(p != myproc()) {
-      acquire(&p->lock);
-      if(p->chan == chan) {
-        p->state = RUNNABLE;
-        list_add(LIST_READY + p->cpu_num, s[i]);
-      } else {
-        list_add(LIST_SLEEPING, s[i]);
-      }
-      release(&p->lock);
-    }
+  // list_clear(LIST_SLEEPING, s, &len);
+
+  // for(int i = 0; i < len; i++) {
+  //   p = PELEM(proc, s[i]);
+  //   if(p != myproc()) {
+  //     acquire(&p->lock);
+  //     if(p->chan == chan) {
+  //       p->state = RUNNABLE;
+  //       list_add(LIST_READY + p->cpu_num, s[i]);
+  //     } else {
+  //       list_add(LIST_SLEEPING, s[i]);
+  //     }
+  //     release(&p->lock);
+  //   }
+  // }
+  // release(&debug_lock);
+ struct concurrent_list *src = PELEM(proc_list, LIST_SLEEPING);
+  struct proc *pred = &src->head;
+  acquire(&pred->list_lock);
+  if (pred->next == LIST_NULL) {
+    release(&pred->list_lock);
+    return;
   }
-//  struct concurrent_list *src = PELEM(proc_list, LIST_SLEEPING);
-//   struct proc *pred = &src->head;
-//   acquire(&pred->list_lock);
-//   if (pred->next == LIST_NULL) {
-//     release(&pred->list_lock);
-//     return;
-//   }
-//   do {
-//     struct proc *cur = PELEM(proc, pred->next);
-//     acquire(&cur->list_lock);
-//     acquire(&cur->lock);
-//     if (cur != myproc() && cur->chan == chan) {
-//       cur->state = RUNNABLE;
-//       pred->next = cur->next;
-//       cur->next = LIST_NULL;
-//       list_add(LIST_READY + cur->cpu_num, cur->index);
-//     }
-//     release(&cur->lock);
-//     release(&pred->list_lock);
-//     pred = cur;
-//     release()
-//   }
-  
-//     while(cur->next != LIST_NULL){
-//       release(&cur->lock);
-//       release(&pred->list_lock);
-//       pred = cur;
-//       cur = PELEM(proc, cur->next);
-//       acquire(&cur->list_lock);
-//       if (cur->chan == chan) {
-//         cur->state = RUNNABLE;
-//         list_add(LIST_READY + cur->cpu_num, cur->index);
-//       }
-//     }
-//     release(&cur->lock);
-//   release(&pred->list_lock);
-//   release(&cur->list_lock);
+  do {
+    struct proc *cur = PELEM(proc, pred->next);
+    acquire(&cur->list_lock);
+    acquire(&cur->lock);
+    if (cur != myproc() && cur->chan == chan) {
+      cur->state = RUNNABLE;
+      pred->next = cur->next;
+      cur->next = LIST_NULL;
+      list_add(LIST_READY + cur->cpu_num, cur->index);
+    }
+    release(&cur->lock);
+    release(&pred->list_lock);
+    pred = cur;
+  } while(pred->next != LIST_NULL);
+  release(&pred->list_lock);
 }
 
 // Kill the process with the given pid.
@@ -766,8 +753,7 @@ list_add(int list_index, int proc_index)
   release(&cur->list_lock);
 }
 
-// to remove first call DEQUEUE without locking proc_index
-// to remove specific node must hold p->lock before entering
+// to remove first call DEQUEUE
 // return LIST_NULL if list is empty otherwise guaranteed to succeed
 int
 list_remove(int list_index, int proc_index)
@@ -797,14 +783,12 @@ list_remove(int list_index, int proc_index)
   return proc_index;
 }
 
-void
-list_clear(int src, int *dst, int *len)
+int
+cpu_process_count(int cpu_num)
 {
-  int temp;
-  *len = 0;
-  while((temp = DEQUEUE(src)) != LIST_NULL) {
-    dst[(*len)++] = temp;
-  }
+  if (0 <= cpu_num && cpu_num <= cpu_count)
+    return cpus[cpu_num].proc_count;
+  return -1;
 }
 
 int

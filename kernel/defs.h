@@ -107,7 +107,7 @@ void            procdump(void);
 void            proc_list_init();
 void            list_add(int proc_index, int dst_index);
 int             list_remove(int src_index, int proc_index);
-void            list_clear(int src, int *dst, int *len);
+int             cpu_process_count(int cpu_num);
 int             set_cpu(int cpu_num);
 int             get_cpu(void);
 void            inc_cpu_count(void);

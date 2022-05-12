@@ -1764,7 +1764,7 @@ void
 manywrites(char *s)
 {
   int nchildren = 4;
-  int howmany = 30; // increase to look for deadlock
+  int howmany = 100; // increase to look for deadlock
   set_cpu(1);
   
   for(int ci = 0; ci < nchildren; ci++){
