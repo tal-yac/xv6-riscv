@@ -1764,8 +1764,7 @@ void
 manywrites(char *s)
 {
   int nchildren = 4;
-  int howmany = 100; // increase to look for deadlock
-  set_cpu(1);
+  int howmany = 30; // increase to look for deadlock
   
   for(int ci = 0; ci < nchildren; ci++){
     int pid = fork();
@@ -1782,7 +1781,6 @@ manywrites(char *s)
       unlink(name);
       
       for(int iters = 0; iters < howmany; iters++){
-        printf("cpu %d pid %d itr %d\n", get_cpu(), getpid(), iters);
         for(int i = 0; i < ci+1; i++){
           int fd = open(name, O_CREATE | O_RDWR);
           if(fd < 0){
