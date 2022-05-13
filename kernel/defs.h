@@ -192,3 +192,4 @@ void            virtio_disk_intr(void);
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
 #define PELEM(a, i) ((a) + (i))
+#define INDEX_OF_ELEM(A, E) (((void *)(E) - (void *)(A)) / sizeof(A[0]))

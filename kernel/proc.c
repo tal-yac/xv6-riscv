@@ -729,7 +729,7 @@ procdump(void)
 void
 proc_list_init()
 {
-   for (struct concurrent_list *l = proc_list; l < PELEM(proc_list, NELEM(proc_list)); l++) {
+  for (struct concurrent_list *l = proc_list; l < PELEM(proc_list, NELEM(proc_list)); l++) {
     l->head.next = LIST_NULL;
     initlock(&l->head.lock, "list_head_lock");
   }
@@ -786,7 +786,7 @@ list_remove(int list_index, int proc_index)
 int
 cpu_process_count(int cpu_num)
 {
-  if (0 <= cpu_num && cpu_num <= cpu_count)
+  if (0 <= cpu_num && cpu_num < cpu_count)
     return cpus[cpu_num].proc_count;
   return -1;
 }
