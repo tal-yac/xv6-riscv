@@ -111,6 +111,7 @@ int             cpu_process_count(int cpu_num);
 int             set_cpu(int cpu_num);
 int             get_cpu(void);
 void            inc_cpu_count(void);
+void            admit_proc(int proc_index);
 
 // swtch.S
 void            swtch(struct context*, struct context*);

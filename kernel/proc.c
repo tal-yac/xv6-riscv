@@ -823,3 +823,14 @@ inc_cpu_count(void)
     count = cpu_count;
   } while (cas(&cpu_count, count, count + 1));
 }
+
+void
+admit_proc(int proc_index)
+{
+  struct cpu *min = cpus; 
+  for (struct cpu *c = cpus + 1; c < &cpus[cpu_count]; c++) {
+    if (c->proc_count < min->proc_count)
+      min = c;
+  }
+  list_add(LIST_READY + INDEX_OF_ELEM(cpus, min), proc_index);
+}
