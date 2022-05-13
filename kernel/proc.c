@@ -166,7 +166,6 @@ allocproc(void)
 static void
 freeproc(struct proc *p)
 {
-  list_remove(LIST_ZOMBIE, p->index);
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
@@ -181,7 +180,8 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
-  list_add(LIST_UNUSED, p->index);
+  if (list_remove(LIST_ZOMBIE, p->index) != LIST_NULL)
+    list_add(LIST_UNUSED, p->index);
 }
 
 // Create a user page table for a given process,
@@ -266,6 +266,7 @@ userinit(void)
   release(&p->lock);
 
   list_add(LIST_READY, 0);
+  cpus->proc_count++;
 }
 
 // Grow or shrink user memory by n bytes.
@@ -342,7 +343,14 @@ fork(void)
   i = np->index;
   release(&np->lock);
 
+  #ifdef BLNCFLAG_ON
+  acquire(&p->lock);
+  admit_proc(i);
+  release(&p->lock);
+  #else
   list_add(LIST_READY + cpu, i);
+  #endif
+
   return pid;
 }
 
@@ -470,14 +478,23 @@ scheduler(void)
   struct proc *p;
   struct cpu *c = mycpu();
   int _cpu_num = cpuid();
-  int pi;
+  int pi = LIST_NULL;
 
   c->proc = 0;
   for(;;){
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
     if ((pi = DEQUEUE(LIST_READY + _cpu_num)) == LIST_NULL) {
-      continue;
+      #ifdef BLNCFLAG_ON
+      for (int i = 0; i < cpu_count; i++) {
+        if ((pi = DEQUEUE(LIST_READY + i)) != LIST_NULL) {
+          _cpu_num = i;
+          break;
+        }
+      }
+      if (pi == LIST_NULL)
+      #endif
+        continue;
     }
     p = PELEM(proc, pi);
     acquire(&p->lock);
@@ -594,29 +611,7 @@ sleep(void *chan, struct spinlock *lk)
 void
 wakeup(void *chan)
 {
-  //acquire(&debug_lock);
-  // struct proc *p;
-  // static int s[NCPU][NPROC];
-
-  // int len;
-
-  // list_clear(LIST_SLEEPING, s, &len);
-
-  // for(int i = 0; i < len; i++) {
-  //   p = PELEM(proc, s[i]);
-  //   if(p != myproc()) {
-  //     acquire(&p->lock);
-  //     if(p->chan == chan) {
-  //       p->state = RUNNABLE;
-  //       list_add(LIST_READY + p->cpu_num, s[i]);
-  //     } else {
-  //       list_add(LIST_SLEEPING, s[i]);
-  //     }
-  //     release(&p->lock);
-  //   }
-  // }
-  // release(&debug_lock);
- struct concurrent_list *src = PELEM(proc_list, LIST_SLEEPING);
+  struct concurrent_list *src = PELEM(proc_list, LIST_SLEEPING);
   struct proc *pred = &src->head;
   acquire(&pred->list_lock);
   if (pred->next == LIST_NULL) {
@@ -631,7 +626,11 @@ wakeup(void *chan)
       cur->state = RUNNABLE;
       pred->next = cur->next;
       cur->next = LIST_NULL;
+      #ifdef BLNCFLAG_ON
+      admit_proc(cur->index);
+      #else
       list_add(LIST_READY + cur->cpu_num, cur->index);
+      #endif
     }
     release(&cur->lock);
     release(&pred->list_lock);
@@ -654,9 +653,9 @@ kill(int pid)
       p->killed = 1;
       if(p->state == SLEEPING){
         // Wake process from sleep().
-        list_remove(LIST_SLEEPING, p->index);
         p->state = RUNNABLE;
-        list_add(LIST_READY + p->cpu_num, p->index);
+        if (list_remove(LIST_SLEEPING, p->index) != LIST_NULL)
+          list_add(LIST_READY + p->cpu_num, p->index);
       }
       release(&p->lock);
       return 0;
@@ -754,7 +753,7 @@ list_add(int list_index, int proc_index)
 }
 
 // to remove first call DEQUEUE
-// return LIST_NULL if list is empty otherwise guaranteed to succeed
+// returns LIST_NULL if fails otherwise returns proc_index
 int
 list_remove(int list_index, int proc_index)
 {
@@ -771,6 +770,10 @@ list_remove(int list_index, int proc_index)
     while(cur->index != proc_index){
       release(&pred->list_lock);
       pred = cur;
+      if (cur->next == LIST_NULL) {
+        release(&cur->list_lock);
+        return LIST_NULL;
+      }
       cur = PELEM(proc, cur->next);
       acquire(&cur->list_lock);
     }
@@ -832,5 +835,11 @@ admit_proc(int proc_index)
     if (c->proc_count < min->proc_count)
       min = c;
   }
-  list_add(LIST_READY + INDEX_OF_ELEM(cpus, min), proc_index);
+  struct proc *p = PELEM(proc, proc_index);
+  p->cpu_num = INDEX_OF_ELEM(cpus, min);
+  list_add(LIST_READY + p->cpu_num, proc_index);
+  int count;
+  do {
+    count = min->proc_count;
+  } while (cas(&min->proc_count, count, count + 1));
 }
