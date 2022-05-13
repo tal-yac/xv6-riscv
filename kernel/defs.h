@@ -104,13 +104,6 @@ void            yield(void);
 int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
 int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
 void            procdump(void);
-void            proc_list_init();
-void            list_add(int proc_index, int dst_index);
-int             list_remove(int src_index, int proc_index);
-int             cpu_process_count(int cpu_num);
-int             set_cpu(int cpu_num);
-int             get_cpu(void);
-void            inc_cpu_count(void);
 
 // swtch.S
 void            swtch(struct context*, struct context*);
@@ -191,5 +184,3 @@ void            virtio_disk_intr(void);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
-#define PELEM(a, i) ((a) + (i))
-#define INDEX_OF_ELEM(A, E) (((void *)(E) - (void *)(A)) / sizeof(A[0]))

@@ -6,30 +6,19 @@
 #include "proc.h"
 #include "defs.h"
 
-#define LIST_NULL (-1)
-#define DEQUEUE(Q) (list_remove(Q, LIST_NULL))
-
-enum List_type {LIST_UNUSED, LIST_SLEEPING, LIST_ZOMBIE, LIST_READY};
-struct spinlock debug_lock;
-
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
 
 struct proc *initproc;
 
-struct concurrent_list proc_list[LIST_READY + NCPU];
-
 int nextpid = 1;
-int cpu_count = 0;
+struct spinlock pid_lock;
 
 extern void forkret(void);
 static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
-
-// returns 0 on success !0 otherwise
-extern uint64 cas(volatile void *addr, int expected, int newval);
 
 // helps ensure that wakeups of wait()ing
 // parents are not lost. helps obey the
@@ -57,21 +46,14 @@ proc_mapstacks(pagetable_t kpgtbl) {
 void
 procinit(void)
 {
-  int i;
   struct proc *p;
-  initlock(&debug_lock, "debug_lock");
-
-  proc_list_init();
+  
+  initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
-  for(i = 0, p = proc; p < &proc[NPROC]; i++, p++) {
-    initlock(&p->lock, "proc");
-    initlock(&p->list_lock, "list_lock");
-    p->kstack = KSTACK((int) (p - proc));
-    p->next = LIST_NULL;
-    p->index = i;
-    list_add(LIST_UNUSED, i);
+  for(p = proc; p < &proc[NPROC]; p++) {
+      initlock(&p->lock, "proc");
+      p->kstack = KSTACK((int) (p - proc));
   }
-
 }
 
 // Must be called with interrupts disabled,
@@ -107,14 +89,10 @@ int
 allocpid() {
   int pid;
   
-  // acquire(&pid_lock);
-  // pid = nextpid;
-  // nextpid = nextpid + 1;
-  // release(&pid_lock);
-
-  do {
-    pid = nextpid;
-  } while (cas(&nextpid, pid, pid + 1));
+  acquire(&pid_lock);
+  pid = nextpid;
+  nextpid = nextpid + 1;
+  release(&pid_lock);
 
   return pid;
 }
@@ -126,13 +104,19 @@ allocpid() {
 static struct proc*
 allocproc(void)
 {
-  int pi;
-  if ((pi = DEQUEUE(LIST_UNUSED)) == LIST_NULL)
-    return 0;
-    
-  struct proc *p = &proc[pi];
+  struct proc *p;
 
-  acquire(&p->lock);
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->state == UNUSED) {
+      goto found;
+    } else {
+      release(&p->lock);
+    }
+  }
+  return 0;
+
+found:
   p->pid = allocpid();
   p->state = USED;
 
@@ -166,7 +150,6 @@ allocproc(void)
 static void
 freeproc(struct proc *p)
 {
-  list_remove(LIST_ZOMBIE, p->index);
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
@@ -181,7 +164,6 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
-  list_add(LIST_UNUSED, p->index);
 }
 
 // Create a user page table for a given process,
@@ -261,11 +243,8 @@ userinit(void)
   p->cwd = namei("/");
 
   p->state = RUNNABLE;
-  p->cpu_num = 0;
 
   release(&p->lock);
-
-  list_add(LIST_READY, 0);
 }
 
 // Grow or shrink user memory by n bytes.
@@ -293,7 +272,7 @@ growproc(int n)
 int
 fork(void)
 {
-  int i, pid, cpu;
+  int i, pid;
   struct proc *np;
   struct proc *p = myproc();
 
@@ -332,17 +311,10 @@ fork(void)
   np->parent = p;
   release(&wait_lock);
 
-  acquire(&p->lock);
-  cpu = p->cpu_num;
-  release(&p->lock);
-
   acquire(&np->lock);
   np->state = RUNNABLE;
-  np->cpu_num = cpu;
-  i = np->index;
   release(&np->lock);
 
-  list_add(LIST_READY + cpu, i);
   return pid;
 }
 
@@ -400,8 +372,6 @@ exit(int status)
   p->state = ZOMBIE;
 
   release(&wait_lock);
-
-  list_add(LIST_ZOMBIE, p->index);
 
   // Jump into the scheduler, never to return.
   sched();
@@ -469,31 +439,28 @@ scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
-  int _cpu_num = cpuid();
-  int pi;
-
+  
   c->proc = 0;
   for(;;){
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
-    if ((pi = DEQUEUE(LIST_READY + _cpu_num)) == LIST_NULL) {
-      continue;
-    }
-    p = PELEM(proc, pi);
-    acquire(&p->lock);
-    // Switch to chosen process.  It is the process's job
-    // to release its lock and then reacquire it
-    // before jumping back to us.
-    p->state = RUNNING;
-    p->cpu_num = _cpu_num;
-    c->proc = p;
-    swtch(&c->context, &p->context);
 
-    // Process is done running for now.
-    // It should have changed its p->state before coming back.
-    c->proc = 0;
-    
-    release(&p->lock);
+    for(p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
+      if(p->state == RUNNABLE) {
+        // Switch to chosen process.  It is the process's job
+        // to release its lock and then reacquire it
+        // before jumping back to us.
+        p->state = RUNNING;
+        c->proc = p;
+        swtch(&c->context, &p->context);
+
+        // Process is done running for now.
+        // It should have changed its p->state before coming back.
+        c->proc = 0;
+      }
+      release(&p->lock);
+    }
   }
 }
 
@@ -531,7 +498,6 @@ yield(void)
   struct proc *p = myproc();
   acquire(&p->lock);
   p->state = RUNNABLE;
-  list_add(LIST_READY + p->cpu_num, p->index);
   sched();
   release(&p->lock);
 }
@@ -572,7 +538,6 @@ sleep(void *chan, struct spinlock *lk)
   // so it's okay to release lk.
 
   acquire(&p->lock);  //DOC: sleeplock1
-  list_add(LIST_SLEEPING, p->index);
   release(lk);
 
   // Go to sleep.
@@ -594,50 +559,17 @@ sleep(void *chan, struct spinlock *lk)
 void
 wakeup(void *chan)
 {
-  //acquire(&debug_lock);
-  // struct proc *p;
-  // static int s[NCPU][NPROC];
+  struct proc *p;
 
-  // int len;
-
-  // list_clear(LIST_SLEEPING, s, &len);
-
-  // for(int i = 0; i < len; i++) {
-  //   p = PELEM(proc, s[i]);
-  //   if(p != myproc()) {
-  //     acquire(&p->lock);
-  //     if(p->chan == chan) {
-  //       p->state = RUNNABLE;
-  //       list_add(LIST_READY + p->cpu_num, s[i]);
-  //     } else {
-  //       list_add(LIST_SLEEPING, s[i]);
-  //     }
-  //     release(&p->lock);
-  //   }
-  // }
-  // release(&debug_lock);
- struct concurrent_list *src = PELEM(proc_list, LIST_SLEEPING);
-  struct proc *pred = &src->head;
-  acquire(&pred->list_lock);
-  if (pred->next == LIST_NULL) {
-    release(&pred->list_lock);
-    return;
-  }
-  do {
-    struct proc *cur = PELEM(proc, pred->next);
-    acquire(&cur->list_lock);
-    acquire(&cur->lock);
-    if (cur != myproc() && cur->chan == chan) {
-      cur->state = RUNNABLE;
-      pred->next = cur->next;
-      cur->next = LIST_NULL;
-      list_add(LIST_READY + cur->cpu_num, cur->index);
+  for(p = proc; p < &proc[NPROC]; p++) {
+    if(p != myproc()){
+      acquire(&p->lock);
+      if(p->state == SLEEPING && p->chan == chan) {
+        p->state = RUNNABLE;
+      }
+      release(&p->lock);
     }
-    release(&cur->lock);
-    release(&pred->list_lock);
-    pred = cur;
-  } while(pred->next != LIST_NULL);
-  release(&pred->list_lock);
+  }
 }
 
 // Kill the process with the given pid.
@@ -654,9 +586,7 @@ kill(int pid)
       p->killed = 1;
       if(p->state == SLEEPING){
         // Wake process from sleep().
-        list_remove(LIST_SLEEPING, p->index);
         p->state = RUNNABLE;
-        list_add(LIST_READY + p->cpu_num, p->index);
       }
       release(&p->lock);
       return 0;
@@ -723,103 +653,4 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
-}
-
-// init head procs - we only need next and lock
-void
-proc_list_init()
-{
-  for (struct concurrent_list *l = proc_list; l < PELEM(proc_list, NELEM(proc_list)); l++) {
-    l->head.next = LIST_NULL;
-    initlock(&l->head.lock, "list_head_lock");
-  }
-}
-
-void
-list_add(int list_index, int proc_index)
-{
-  struct concurrent_list *dst = PELEM(proc_list, list_index);
-  struct proc *cur = &dst->head;
-  acquire(&cur->list_lock);
-  while(cur->next != LIST_NULL){
-    struct proc *pred = cur;
-    cur = PELEM(proc, cur->next);
-    if (cur->index == proc_index)
-      printf("SAME ENQ: list: %d index: %d \n", list_index, proc_index);
-    release(&pred->list_lock);
-    acquire(&cur->list_lock);
-  }
-  cur->next = proc_index;
-  release(&cur->list_lock);
-}
-
-// to remove first call DEQUEUE
-// return LIST_NULL if list is empty otherwise guaranteed to succeed
-int
-list_remove(int list_index, int proc_index)
-{
-  struct concurrent_list *src = PELEM(proc_list, list_index);
-  struct proc *pred = &src->head;
-  acquire(&pred->list_lock);
-  if (pred->next == LIST_NULL) {
-    release(&pred->list_lock);
-    return LIST_NULL;
-  }
-  struct proc *cur = PELEM(proc, pred->next);
-  acquire(&cur->list_lock);
-  if (proc_index != LIST_NULL)
-    while(cur->index != proc_index){
-      release(&pred->list_lock);
-      pred = cur;
-      cur = PELEM(proc, cur->next);
-      acquire(&cur->list_lock);
-    }
-  pred->next = cur->next;
-  release(&pred->list_lock);
-  cur->next = LIST_NULL;
-  if (proc_index == LIST_NULL)
-    proc_index = cur->index;
-  release(&cur->list_lock);
-  return proc_index;
-}
-
-int
-cpu_process_count(int cpu_num)
-{
-  if (0 <= cpu_num && cpu_num < cpu_count)
-    return cpus[cpu_num].proc_count;
-  return -1;
-}
-
-int
-set_cpu(int cpu_num)
-{
-  if (cpu_num < 0 || cpu_num >= cpu_count)
-    return -1;
-  struct proc *p = myproc();
-  acquire(&p->lock);
-  p->cpu_num = cpu_num;
-  release(&p->lock);
-  yield();
-  return 0;
-}
-
-int
-get_cpu(void)
-{
-  int cpu = -1;
-  struct proc *p = myproc();
-  acquire(&p->lock);
-  cpu = p->cpu_num;
-  release(&p->lock);
-  return cpu;
-}
-
-void
-inc_cpu_count(void)
-{
-  int count;
-  do {
-    count = cpu_count;
-  } while (cas(&cpu_count, count, count + 1));
 }

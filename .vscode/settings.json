@@ -3,10 +3,6 @@
         "syscall.h": "c",
         "user.h": "c",
         "types.h": "c",
-        "defs.h": "c",
-        "proc.h": "c",
-        "param.h": "c",
-        "memlayout.h": "c",
-        "spinlock.h": "c"
+        "defs.h": "c"
     }
 }
