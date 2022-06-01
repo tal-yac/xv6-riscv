@@ -310,13 +310,14 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
+    *pte &= ~PTE_W; 
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    // if((mem = kalloc()) == 0)
+    //   goto err;
+    // memmove(mem, (char*)pa, PGSIZE);
+    if(mappages(new, i, PGSIZE, pa, flags | PTE_COW) != 0){
+      // kfree(mem);
       goto err;
     }
   }
@@ -429,6 +430,33 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   if(got_null){
     return 0;
   } else {
+    return -1;
+  }
+}
+
+int
+uvmfault(pagetable_t proc_pagetable, uint64 va) {
+  pagetable_t old = proc_pagetable;
+  pte_t *pte;
+  uint64 pa, i;
+  uint flags;
+  char *mem;
+
+  if((pte = walk(proc_pagetable, PGROUNDDOWN(va), 0)) == 0)
+    panic("uvmfault(): pte should exist");
+  if((*pte & PTE_V) == 0)
+    panic("uvmfault(): page not present");
+  pa = PTE2PA(*pte);
+  flags = PTE_FLAGS(*pte);
+  if (flags & PTE_COW == 0) {
+    panic("uvmfault(): page not COW");
+  }
+  if((mem = kalloc()) == 0)
+    return -1;
+  memmove(mem, (char*)pa, PGSIZE);
+  if(mappages(proc_pagetable, va, PGSIZE, pa, flags | PTE_W) != 0){
+    kfree(mem);
+    printf("uvmfault(): out of memory");
     return -1;
   }
 }
