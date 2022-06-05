@@ -301,30 +301,28 @@ int
 uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 {
   pte_t *pte;
-  uint64 pa, i;
-  uint flags;
-  char *mem;
+  uint64 pa, va;
 
-  for(i = 0; i < sz; i += PGSIZE){
-    if((pte = walk(old, i, 0)) == 0)
+  for(va = 0; va < sz; va += PGSIZE){
+    if((pte = walk(old, va, 0)) == 0)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
-    *pte &= ~PTE_W; 
     pa = PTE2PA(*pte);
-    flags = PTE_FLAGS(*pte);
-    // if((mem = kalloc()) == 0)
-    //   goto err;
-    // memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, pa, flags | PTE_COW) != 0){
-      // kfree(mem);
+
+    if (*pte & PTE_W) {
+      *pte = (*pte | PTE_COW) & ~PTE_W;
+    } 
+
+    if(mappages(new, va, PGSIZE, pa, (uint)PTE_FLAGS(*pte)) < 0)
       goto err;
-    }
+
+    refs_add(pa);
   }
   return 0;
 
  err:
-  uvmunmap(new, 0, i / PGSIZE, 1);
+  uvmunmap(new, 0, va / PGSIZE, 1);
   return -1;
 }
 
@@ -351,6 +349,9 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
+    if (pagefault(pagetable, va0) < 0)
+      return -1;
+
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
@@ -430,33 +431,6 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   if(got_null){
     return 0;
   } else {
-    return -1;
-  }
-}
-
-int
-uvmfault(pagetable_t proc_pagetable, uint64 va) {
-  pagetable_t old = proc_pagetable;
-  pte_t *pte;
-  uint64 pa, i;
-  uint flags;
-  char *mem;
-
-  if((pte = walk(proc_pagetable, PGROUNDDOWN(va), 0)) == 0)
-    panic("uvmfault(): pte should exist");
-  if((*pte & PTE_V) == 0)
-    panic("uvmfault(): page not present");
-  pa = PTE2PA(*pte);
-  flags = PTE_FLAGS(*pte);
-  if (flags & PTE_COW == 0) {
-    panic("uvmfault(): page not COW");
-  }
-  if((mem = kalloc()) == 0)
-    return -1;
-  memmove(mem, (char*)pa, PGSIZE);
-  if(mappages(proc_pagetable, va, PGSIZE, pa, flags | PTE_W) != 0){
-    kfree(mem);
-    printf("uvmfault(): out of memory");
     return -1;
   }
 }
