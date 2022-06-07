@@ -15,6 +15,10 @@ void freerange(void *pa_start, void *pa_end);
 
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
+<<<<<<< Updated upstream
+=======
+                   
+>>>>>>> Stashed changes
 extern uint64 cas(volatile void* addr, int expected, int newval);
 
 struct run {
@@ -55,10 +59,16 @@ kfree(void *pa)
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
+<<<<<<< Updated upstream
   if (refs_remove((uint64)pa) > 0)
     return;
   
   refs[PA2IDX(pa)] = 0;
+=======
+  if (refs_remove((uint64)pa))
+    return;
+  
+>>>>>>> Stashed changes
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
 
@@ -98,7 +108,11 @@ refs_add(uint64 pa)
   int ref;
   do {
     ref = refs[PA2IDX(pa)];
+<<<<<<< Updated upstream
   } while (cas(refs + PA2IDX(pa),ref, ref + 1));
+=======
+  } while (cas(refs + PA2IDX(pa), ref, ref + 1));
+>>>>>>> Stashed changes
 }
 
 int
@@ -107,6 +121,10 @@ refs_remove(uint64 pa)
   int ref;
   do {
     ref = refs[PA2IDX(pa)];
+<<<<<<< Updated upstream
   } while (cas(refs + PA2IDX(pa),ref, (ref -1)));
+=======
+  } while (cas(refs + PA2IDX(pa), ref, (ref - 1)));
+>>>>>>> Stashed changes
   return ref - 1;
 }

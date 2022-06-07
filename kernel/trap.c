@@ -40,6 +40,7 @@ pagefault(pagetable_t pagetable, uint64 va)
   pte_t *pte;
   if ((pte = walk(pagetable, va, 0)) == 0)
     return -1;
+<<<<<<< Updated upstream
   if ((*pte & PTE_V) == 0)
     return -1;
 
@@ -57,6 +58,28 @@ pagefault(pagetable_t pagetable, uint64 va)
   } else {
     return -1;
   }
+=======
+
+  if ((*pte & PTE_V) == 0)
+    return -1;
+  if ((*pte & PTE_COW) == 0)
+    return 1;
+
+  char *mem;
+  if ((mem = kalloc()) == 0)
+    return -1;
+
+  uint64 pa = PTE2PA(*pte);
+  memmove(mem, (char *) pa, PGSIZE);
+  uint64 flags = PTE_FLAGS(*pte);
+  flags |= PTE_W;
+  flags &= ~PTE_COW;
+  *pte = PA2PTE(mem) | flags;
+
+  kfree((void *) pa);
+
+  return 0;
+>>>>>>> Stashed changes
 }
 
 
