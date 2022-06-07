@@ -315,14 +315,6 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     } 
 
     pa = PTE2PA(*pte);
-<<<<<<< Updated upstream
-
-    if (*pte & PTE_W) {
-      *pte = (*pte | PTE_COW) & ~PTE_W;
-    } 
-
-=======
->>>>>>> Stashed changes
     if(mappages(new, va, PGSIZE, pa, (uint)PTE_FLAGS(*pte)) < 0)
       goto err;
 
