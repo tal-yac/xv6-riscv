@@ -2,6 +2,7 @@
 #include "kernel/stat.h"
 #include "user/user.h"
 #include "kernel/fs.h"
+#include "kernel/fcntl.h"
 
 char*
 fmtname(char *path)
@@ -30,7 +31,7 @@ ls(char *path)
   struct dirent de;
   struct stat st;
 
-  if((fd = open(path, 0)) < 0){
+  if((fd = open(path, O_NODEREFERENCE)) < 0){
     fprintf(2, "ls: cannot open %s\n", path);
     return;
   }
@@ -63,8 +64,20 @@ ls(char *path)
         printf("ls: cannot stat %s\n", buf);
         continue;
       }
+      if (st.type == T_SOFT) {
+        // TODO: print link -> dereferenced
+        int fd = open(buf, O_NODEREFERENCE);
+        if (fd < 0) {
+          printf("ls: cannot dereference symbolic link %s\n", buf);
+          continue;
+        }
+
+      }
       printf("%s %d %d %d\n", fmtname(buf), st.type, st.ino, st.size);
     }
+    break;
+  case T_SOFT:
+    // TODO: print link -> dereferenced
     break;
   }
   close(fd);

@@ -304,7 +304,8 @@ sys_open(void)
       return -1;
     }
   } else {
-    if((ip = namei(path)) == 0){
+    ip = (omode & O_NODEREFERENCE) ? namei(path) : link_dereference(namei(path), 0);
+    if(ip == 0){
       end_op();
       return -1;
     }
@@ -395,7 +396,7 @@ sys_chdir(void)
   struct proc *p = myproc();
   
   begin_op();
-  if(argstr(0, path, MAXPATH) < 0 || (ip = namei(path)) == 0){
+  if(argstr(0, path, MAXPATH) < 0 || (ip = link_dereference(namei(path), 0)) == 0){
     end_op();
     return -1;
   }
@@ -483,4 +484,62 @@ sys_pipe(void)
     return -1;
   }
   return 0;
+}
+
+uint64
+sys_symlink(void)
+{
+  char new[MAXPATH], old[MAXPATH];
+  struct inode *ip;
+
+  if(argstr(0, old, MAXPATH) < 0 || argstr(1, new, MAXPATH) < 0)
+    return -1;
+
+  begin_op();
+
+  ip = create(new, T_SOFT, 0, 0);
+  if(ip == 0){
+    end_op();
+    return -1;
+  }
+  if (writei(ip, 0, (uint64) old, 0, strlen(old)) != strlen(old))
+    panic("sys_link: writei failed");
+  iunlockput(ip);
+  end_op();
+  return 0;
+}
+
+uint64
+sys_readlink(void)
+{
+  char path[MAXPATH];
+  char test;
+  uint64 buf;
+  int len;
+  if(argstr(0, path, MAXPATH) < 0 || argaddr(1, &buf) < 0 || argint(2, &len) < 0)
+    return -1;
+  struct inode *ip = namei(path);
+  if (ip == 0)
+    return -1;
+  if (readi(ip, 1, buf, 0, len) == 0)
+    return -1;
+  if (readi(ip, 0, (uint64) &test, len, 1))
+    return -1;
+  return 0;
+}
+
+struct inode *
+link_dereference(struct inode *ip, int depth)
+{
+  if (!ip || depth > MAX_DEREFERENCE)
+    return ip;
+  ilock(ip);
+  if (ip->type != T_SOFT) {
+    iunlock(ip);
+    return ip;
+  }
+  static char path[MAXPATH];
+  readi(ip, 0, (uint64) path, 0, MAXPATH);
+  iunlock(ip);
+  return link_dereference(namei(path), depth + 1);
 }

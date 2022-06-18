@@ -10,7 +10,7 @@
 
 #define BUFSIZE 1024
 
-int main(int argc, char *argv[]) {
+void part2(void) {
     char buf[BUFSIZE];
     memset(buf, 'x', BUFSIZE);
     int fd = open("testtest", O_CREATE | O_RDWR);
@@ -32,5 +32,18 @@ int main(int argc, char *argv[]) {
     }
 
     printf("Finished writing 10MB\n");
+}
+
+void part3(char **argv) {
+    symlink("/ls", "/new_ls");
+    char buf[30];
+    readlink("/new_ls", buf, 30);
+    // exec("/new_ls", argv);
+    unlink("/new_ls");
+    printf("%s\n", buf);
+}
+
+int main(int argc, char *argv[]) {
+    part3(argv);
     exit(0);
 }
