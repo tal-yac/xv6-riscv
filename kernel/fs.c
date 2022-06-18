@@ -387,16 +387,41 @@ bmap(struct inode *ip, uint bn)
   }
   bn -= NDIRECT;
 
-  if(bn < NINDIRECT){
-    // Load indirect block, allocating if necessary.
-    if((addr = ip->addrs[NDIRECT]) == 0)
-      ip->addrs[NDIRECT] = addr = balloc(ip->dev);
+  if(bn < NDOUBLY_INDIRECT){
+    // Load double indirect block, allocating if necessary.
+    if((addr = ip->addrs[NDIRECT + 1]) == 0)
+      ip->addrs[NDIRECT + 1] = addr = balloc(ip->dev);
     bp = bread(ip->dev, addr);
     a = (uint*)bp->data;
-    if((addr = a[bn]) == 0){
-      a[bn] = addr = balloc(ip->dev);
+
+    // load 2nd layer block.
+    uint double_index = bn / NINDIRECT;
+    if((addr = a[double_index]) == 0){
+      a[double_index] = addr = balloc(ip->dev);
       log_write(bp);
     }
+    brelse(bp);
+
+    // now find disk block.
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+    uint pos = bn % NINDIRECT;
+    if ((addr = a[pos]) == 0) {
+      a[pos] = addr = balloc(ip->dev);
+      log_write(bp);
+    }
+
+  // if(bn < NINDIRECT){
+    // Load indirect block, allocating if necessary.
+    // if((addr = ip->addrs[NDIRECT]) == 0)
+    //   ip->addrs[NDIRECT] = addr = balloc(ip->dev);
+    // bp = bread(ip->dev, addr);
+    // a = (uint*)bp->data;
+    // if((addr = a[bn]) == 0){
+    //   a[bn] = addr = balloc(ip->dev);
+    //   log_write(bp);
+    // }
+    
     brelse(bp);
     return addr;
   }
