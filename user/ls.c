@@ -27,7 +27,7 @@ void
 ls(char *path)
 {
   char buf[512], *p;
-  int fd;
+  int fd, fdr;
   struct dirent de;
   struct stat st;
 
@@ -66,18 +66,34 @@ ls(char *path)
       }
       if (st.type == T_SOFT) {
         // TODO: print link -> dereferenced
-        int fd = open(buf, O_NODEREFERENCE);
-        if (fd < 0) {
+        fdr = open(buf, O_NODEREFERENCE);
+        if (fdr < 0) {
           printf("ls: cannot dereference symbolic link %s\n", buf);
           continue;
         }
-
+        p = buf + strlen(buf);
+        *p++ = '-';
+        *p++ = '>';
+        read(fdr, p, 512 - strlen(buf) - 1);
+        close(fdr);
       }
       printf("%s %d %d %d\n", fmtname(buf), st.type, st.ino, st.size);
     }
     break;
+
   case T_SOFT:
-    // TODO: print link -> dereferenced
+    strcpy(buf, path);
+    fdr = open(buf, O_NODEREFERENCE);
+    if (fdr < 0) {
+      printf("ls: cannot dereference symbolic link %s\n", buf);
+      break;
+    }
+    p = buf + strlen(buf);
+    *p++ = '-';
+    *p++ = '>';
+    read(fdr, p, 512 - strlen(buf) - 1);
+    close(fdr);
+    printf("%s %d %d %d\n", fmtname(buf), st.type, st.ino, st.size);
     break;
   }
   close(fd);

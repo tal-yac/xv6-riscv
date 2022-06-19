@@ -44,6 +44,7 @@ void part3(char **argv) {
 }
 
 int main(int argc, char *argv[]) {
-    part3(argv);
+    part2();
+    // part3(argv);
     exit(0);
 }
