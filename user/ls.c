@@ -4,30 +4,36 @@
 #include "kernel/fs.h"
 #include "kernel/fcntl.h"
 
+#define PADDING (2 * DIRSIZ + 2) // 2 dir entries and a possible "->" for symlink
+
 char*
 fmtname(char *path)
 {
-  static char buf[DIRSIZ+1];
-  char *p;
+  static char buf[PADDING + 1];
 
-  // Find first character after last slash.
-  for(p=path+strlen(path); p >= path && *p != '/'; p--)
-    ;
-  p++;
+  int pos = 0;
+
+  for (int i = 0; i < strlen(path) && path[i] != '>'; i++) {
+    if (path[i] == '/')
+      pos = i + 1;
+  }
+
+  char *p = path + pos;
+  pos = strlen(p);
 
   // Return blank-padded name.
-  if(strlen(p) >= DIRSIZ)
+  if(pos >= PADDING)
     return p;
-  memmove(buf, p, strlen(p));
-  memset(buf+strlen(p), ' ', DIRSIZ-strlen(p));
+  memmove(buf, p, pos);
+  memset(buf + pos, ' ', PADDING - pos);
   return buf;
 }
 
 void
 ls(char *path)
 {
-  char buf[512], *p;
-  int fd, fdr;
+  char buf[512], *p, *l;
+  int fd;
   struct dirent de;
   struct stat st;
 
@@ -56,8 +62,9 @@ ls(char *path)
     p = buf+strlen(buf);
     *p++ = '/';
     while(read(fd, &de, sizeof(de)) == sizeof(de)){
-      if(de.inum == 0)
+      if(de.inum == 0) {
         continue;
+      }
       memmove(p, de.name, DIRSIZ);
       p[DIRSIZ] = 0;
       if(stat(buf, &st) < 0){
@@ -65,17 +72,13 @@ ls(char *path)
         continue;
       }
       if (st.type == T_SOFT) {
-        // TODO: print link -> dereferenced
-        fdr = open(buf, O_NODEREFERENCE);
-        if (fdr < 0) {
+        l = buf + strlen(buf);
+        if (readlink(buf, l + 2, 512 - strlen(buf) - 2 - 1) < 0) {
           printf("ls: cannot dereference symbolic link %s\n", buf);
-          continue;
+          continue;;
         }
-        p = buf + strlen(buf);
-        *p++ = '-';
-        *p++ = '>';
-        read(fdr, p, 512 - strlen(buf) - 1);
-        close(fdr);
+        *l++ = '-';
+        *l = '>';
       }
       printf("%s %d %d %d\n", fmtname(buf), st.type, st.ino, st.size);
     }
@@ -83,16 +86,13 @@ ls(char *path)
 
   case T_SOFT:
     strcpy(buf, path);
-    fdr = open(buf, O_NODEREFERENCE);
-    if (fdr < 0) {
+    p = buf + strlen(buf);
+    if (readlink(buf, p + 2, 512 - strlen(buf) - 1) < 0) {
       printf("ls: cannot dereference symbolic link %s\n", buf);
       break;
     }
-    p = buf + strlen(buf);
     *p++ = '-';
-    *p++ = '>';
-    read(fdr, p, 512 - strlen(buf) - 1);
-    close(fdr);
+    *p = '>';
     printf("%s %d %d %d\n", fmtname(buf), st.type, st.ino, st.size);
     break;
   }

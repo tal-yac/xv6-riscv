@@ -36,15 +36,16 @@ void part2(void) {
 
 void part3(char **argv) {
     symlink("/ls", "/new_ls");
+    symlink("/new_ls", "/super_new_ls");
     char buf[30];
-    readlink("/new_ls", buf, 30);
-    // exec("/new_ls", argv);
-    unlink("/new_ls");
+    readlink("/super_new_ls", buf, 30);
+    exec("/super_new_ls", argv);
+    // unlink("/new_ls");
     printf("%s\n", buf);
 }
 
 int main(int argc, char *argv[]) {
-    part2();
-    // part3(argv);
+    // part2();
+    part3(argv);
     exit(0);
 }

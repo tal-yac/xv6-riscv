@@ -310,7 +310,7 @@ sys_open(void)
       return -1;
     }
     ilock(ip);
-    if(ip->type == T_DIR && !(omode == O_RDONLY || omode == O_NODEREFERENCE || omode == (O_RDONLY | O_NODEREFERENCE))){
+    if(ip->type == T_DIR && !(omode == O_RDONLY || omode == O_NODEREFERENCE)) {
       iunlockput(ip);
       end_op();
       return -1;
@@ -539,7 +539,8 @@ link_dereference(struct inode *ip, int depth)
     return ip;
   }
   static char path[MAXPATH];
-  readi(ip, 0, (uint64) path, 0, MAXPATH);
+  int end = readi(ip, 0, (uint64) path, 0, MAXPATH);
+  path[end] = 0;
   iunlock(ip);
   return link_dereference(namei(path), depth + 1);
 }
